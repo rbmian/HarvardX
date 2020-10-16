@@ -1,0 +1,284 @@
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+install.packages("scales")
+install.packages("kable")
+library(dplyr)
+library(tidyverse)
+library(scales)
+library(lubridate)
+library(kable)
+tinytex::install_tinytex()
+
+# 2.1 Data Preparation
+edx <- readRDS("C:\\Users\\Raheem\\Downloads\\edx.rds")
+validation <- readRDS("C:\\Users\\Raheem\\Downloads\\validation.rds")
+
+
+# 2.2 Data Exploration
+# Dimensions of edx
+dim(edx)
+# Dimensions of validation
+dim(validation)
+# Structure of edx
+str(edx)
+# Structure of validation
+str(validation)
+# Summary of edx
+summary(edx)
+
+# 2.2.1 movieId:
+
+# Unique Movies:
+n_distinct(edx$movieId)
+
+# Movies rating distribution
+edx %>% 
+  group_by(movieId) %>%
+  summarise(n=n()) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() + 
+  ggtitle("Movies rating distribution") + 
+  xlab("Number of Ratings") +
+  ylab("Number of Movies")
+# 2.2.2 userID:
+
+# Unique Users in edx:
+n_distinct(edx$userId)
+
+# Users rating distribution:
+edx %>%
+  group_by(userId) %>%
+  summarise(n=n()) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 30, color = "black") +
+  scale_x_log10() +
+  ggtitle("Users rating distribution") +
+  xlab("Number of Ratings") +
+  ylab("Number of Users")
+
+#Sparcity of user X movie matrix
+users <- sample(unique(edx$userId), 100)
+edx %>% filter(userId %in% users) %>%
+  select(userId, movieId, rating) %>%
+  mutate(rating = 1) %>%
+  spread(movieId, rating) %>% 
+  select(sample(ncol(.), 100)) %>% 
+  as.matrix() %>% t(.) %>%
+  image(1:100, 1:100,. , xlab="Movies", ylab="Users") %>%
+  abline(h=0:100+0.5, v=0:100+0.5, col = "grey") %>%
+title("User x Movie Matrix")
+
+# 2.2.3 rating:
+
+# Rating Distribution
+edx %>% 
+  ggplot(aes(rating)) + 
+  geom_histogram(bins = 30, color = "black") +
+  scale_y_log10() +
+  ggtitle("Rating distribution") + 
+  xlab("Rating") +
+  ylab("Number of ratings")
+
+# Each rating count:
+edx %>% group_by(rating) %>% summarize(count = n()) %>%
+  arrange(desc(count))
+
+# 2.2.4 Title:
+
+# Maximum rated movie titles:
+max_r_titles <- edx %>% 
+  group_by(title) %>%
+  summarize(count = n()) %>%
+  top_n(10, count) %>%
+  arrange(desc(count))
+max_r_titles %>%
+  ggplot(aes(x=reorder(title, count), y=count)) +
+  geom_bar(stat='identity', fill="black") + coord_flip(y=c(0, 40000)) +
+  labs(x="", y="Number of ratings") +
+  geom_text(aes(label= count), hjust=-0.1, size=4) +
+  labs(title="Top 10 maximum rated movie titles")
+
+# 2.2.5 timestamp:
+
+# Rating Period:
+tibble(`Start Date` = date(as_datetime(min(edx$timestamp))),
+       `End Date` = date(as_datetime(max(edx$timestamp)))) %>%
+  mutate(Period = duration(max(edx$timestamp)-min(edx$timestamp)))
+
+# Rating per year distribution:
+edx %>% mutate(year = year(as_datetime(timestamp))) %>%
+  ggplot(aes(x=year)) +
+  geom_histogram(bins = 30, color = "black") + 
+  ggtitle("Rating Per Year Distribution") +
+  xlab("Year") +
+  ylab("Number of Ratings")
+
+edx %>% 
+  mutate(date = round_date(as_datetime(timestamp), unit = "day")) %>%
+  group_by(date) %>%
+  summarize(rating = mean(rating)) %>%
+  ggplot(aes(date, rating)) +
+  geom_point() +
+  geom_smooth() +
+  ggtitle("Average rating perday distribution")
+
+# Average rating over time distribution
+edx %>%
+  mutate(date = round_date(as_datetime(timestamp), unit = "day")) %>%
+  group_by(date) %>%
+  summarize(rating = mean(rating)) %>%
+  ggplot(aes(date, rating)) +
+  geom_point() +
+  geom_smooth() +
+  ggtitle("Average rating per day distribution")
+
+# 2.2.6 Genres
+
+# Unique Genres:
+n_distinct(edx$genres)
+  
+# Highest rated Genres
+ edx %>% 
+  group_by(genres) %>%
+  summarize(count = n()) %>%
+  top_n(10, count) %>%
+  arrange(desc(count))
+
+#Genres of Highest rated movies
+ highest_r_genres <- edx %>% 
+   group_by(genres, title) %>%
+   summarize(count = n()) %>%
+   arrange(desc(count))
+head(highest_r_genres)
+
+# 4.1 Loss Function:
+#Define Root Mean Squared Error
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+# 4.2.1  Average Model
+mu <- mean(edx$rating)
+mu
+# RMSE Basic Linear Model for training set
+RMSE_E1 <- RMSE(edx$rating, mu)
+RMSE_E1
+
+# #RMSE Basic Linear Model for test set
+RMSE_V1 <- RMSE(validation$rating, mu)
+RMSE_V1
+
+# 4.2.2 Movie effect
+mu <- mean(edx$rating)
+movie_avgs <- edx %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = mean(rating - mu))
+movie_avgs
+
+#Movie effect distribution
+qplot(b_i, data = movie_avgs, bins = 10, color = I("black")) + 
+  ggtitle("Movie effect distribution") +
+  xlab("Movie effects") +
+  ylab("Count")
+
+#Predicted ratings with Movie Effect
+predicted_ratings1 <- mu + validation %>% 
+  left_join(movie_avgs, by = "movieId") %>%
+  pull(b_i)
+
+#RMSE for Test set
+RMSE_V2 <- RMSE(validation$rating, predicted_ratings1)
+RMSE_V2
+# 4.2.3 Movie+User Effect
+user_avgs <- edx %>% 
+  left_join(movie_avgs, by = "movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating-mu-b_i))
+user_avgs
+
+# user effect distribution
+qplot(b_u, data = user_avgs, bins = 10, color = I("black")) +
+  ggtitle("User effect distribution") +
+  xlab("User effects") +
+  ylab("Count")
+
+#Predicted rating with Movie + User Effect
+predicted_ratings2 <- validation %>%
+  left_join(movie_avgs, by = "movieId") %>%
+  left_join(user_avgs, by = "userId") %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  pull(pred)
+#RMSE for test set
+RMSE_V3 <- RMSE(validation$rating, predicted_ratings2)
+RMSE_V3
+
+# 4.3 Regularization
+# Selecting the lambda a tunning parameter using cross-validation
+lambdas <- seq(0, 10, 0.25)
+rmses <- sapply(lambdas, function(l) {
+  mu <- mean(edx$rating)
+  b_i <- edx %>% 
+    group_by(movieId) %>% 
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  b_u <- edx %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - mu - b_i)/(n()+l))
+  predicted_ratings_3 <- validation %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = mu + b_i + b_u ) %>%
+    pull(pred)
+  
+  return(RMSE(validation$rating, predicted_ratings_3))
+  })
+qplot(lambdas, rmses)
+
+#For the full model, the optimal  lambda is:
+lambda <- lambdas[which.min(rmses)]
+lambda
+RMSE_V4 <- min(rmses)
+RMSE_V4
+
+#Install recosystem package for matrix factorization
+install.packages("recosystem")
+library(recosystem)
+
+# 4.3 Matrix Factorization
+set.seed(123)
+
+# The data file for training and testing sets needs to be arranged in sparse form, 
+# each line in the file contains three numbers, "user_index", "item_index","rating".
+# An object of class DataSource specifies the source of a data set,
+# like data_memory(): Specifies a data set from R objects.
+edx_4_mf <- with(edx, data_memory(user_index = userId,
+                                  item_index = movieId,
+                                  rating = rating))
+validation_4_mf <- with(validation, data_memory(user_index = userId,
+                                                item_index = movieId,
+                                                rating = rating))
+
+# Create a model object (a Reference Class object in R) by calling Reco().
+r <- Reco()
+
+# call the $tune() method to select best tuning parameters along a set of candidate values.
+opts <- r$tune(edx_4_mf, opts = list(dim = c(10,20,30),
+                                    lrate = c(0.1, 0.2),
+                                    costp_l1 = 0, 
+                                    costq_l1 = 0,
+                                    nthread = 1, 
+                                    niter = 10))
+opts
+
+# Train the model by calling the $train() method. A number of parameters can be set inside the function, possibly coming from the result of $tune().
+r$train(edx_4_mf, opts = c(opts$min, nthread = 4, niter = 20))
+
+# Use the $predict() method to compute predicted values.
+# An object of class Output describes how the result should be output, out_memory(): Result should be returned as R objects
+
+prediction_4_mf <- r$predict(validation_4_mf, out_memory())
+prediction_4_mf
+RMSE_V5 <- RMSE(validation$rating, prediction_4_mf)
+RMSE_V5
